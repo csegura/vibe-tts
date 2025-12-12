@@ -172,7 +172,7 @@ def synthesize_text(
                     raise SynthesisError(
                         f"Realtime model requires a voice preset. Could not load '{actual_voice}'"
                     )
-                all_prefilled_outputs = torch.load(voice_path, weights_only=False)
+                all_prefilled_outputs = torch.load(voice_path, map_location=actual_device, weights_only=False)
 
                 inputs = processor.process_input_with_cached_prompt(
                     text=script_text,
@@ -305,7 +305,7 @@ def synthesize_text_streaming(
         raise SynthesisError(
             f"Realtime model requires a voice preset. Could not load '{actual_voice}'"
         )
-    all_prefilled_outputs = torch.load(voice_path, weights_only=False)
+    all_prefilled_outputs = torch.load(voice_path, map_location=actual_device, weights_only=False)
 
     # Prepare inputs
     inputs = processor.process_input_with_cached_prompt(
