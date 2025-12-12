@@ -1,9 +1,11 @@
 """Audio generation from text."""
 
+import copy
 import re
+import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Generator, Optional
 
 import numpy as np
 import torch
@@ -148,8 +150,6 @@ def synthesize_text(
         print(f"Processing {len(chunks)} text chunk(s) with {model_type} model...")
 
     try:
-        import copy
-
         for i, chunk in enumerate(chunks):
             if verbose:
                 print(f"  Generating chunk {i + 1}/{len(chunks)}...")
@@ -268,6 +268,113 @@ def synthesize_text(
         return SynthesisResult(audio=final_audio, sample_rate=SAMPLE_RATE, duration=duration)
     except Exception as e:
         raise SynthesisError(f"Audio generation failed: {e}") from e
+
+
+def synthesize_text_streaming(
+    text: str,
+    model_name: Optional[str] = None,
+    device: Optional[str] = None,
+    voice_sample: Optional[str] = None,
+    config: Optional[Config] = None,
+    verbose: bool = False,
+) -> Generator[np.ndarray, None, None]:
+    """Generator that yields audio chunks as they're generated.
+
+    This provides true streaming - audio starts playing within 1-2 seconds
+    instead of waiting for the entire text to be processed.
+
+    Only works with the realtime model.
+    """
+    from vibevoice.modular.streamer import AudioStreamer
+
+    from .voices import get_voice_preset_path
+
+    cfg = config or Config.load()
+    actual_device = get_device(device)
+    model, processor, is_realtime = load_model(model_name, device, cfg, verbose)
+
+    if not is_realtime:
+        raise SynthesisError("Streaming synthesis only supported with realtime model")
+
+    model_dtype = torch.bfloat16 if actual_device == "cuda" else torch.float32
+
+    # Realtime model requires a voice preset
+    actual_voice = voice_sample or "en-Emma"
+    voice_path = get_voice_preset_path(actual_voice, verbose=verbose)
+    if not voice_path or not voice_path.exists():
+        raise SynthesisError(
+            f"Realtime model requires a voice preset. Could not load '{actual_voice}'"
+        )
+    all_prefilled_outputs = torch.load(voice_path, weights_only=False)
+
+    # Prepare inputs
+    inputs = processor.process_input_with_cached_prompt(
+        text=text,
+        cached_prompt=all_prefilled_outputs,
+        padding=True,
+        return_tensors="pt",
+        return_attention_mask=True,
+    )
+
+    # Move tensors to device with correct dtype
+    for k, v in inputs.items():
+        if torch.is_tensor(v):
+            if v.dtype in (torch.float32, torch.float16, torch.bfloat16):
+                inputs[k] = v.to(device=actual_device, dtype=model_dtype)
+            else:
+                inputs[k] = v.to(actual_device)
+
+    # Convert cached prompt tensors
+    prefilled_copy = copy.deepcopy(all_prefilled_outputs)
+    for k, v in prefilled_copy.items():
+        if torch.is_tensor(v):
+            if v.dtype in (torch.float32, torch.float16, torch.bfloat16):
+                prefilled_copy[k] = v.to(device=actual_device, dtype=model_dtype)
+            else:
+                prefilled_copy[k] = v.to(actual_device)
+
+    # Create audio streamer for incremental output
+    audio_streamer = AudioStreamer(batch_size=1, stop_signal=None, timeout=None)
+
+    # Track errors from generation thread
+    error_holder = [None]
+
+    def generate_thread():
+        try:
+            with torch.no_grad():
+                model.generate(
+                    **inputs,
+                    tokenizer=processor.tokenizer,
+                    cfg_scale=1.5,
+                    generation_config={"do_sample": False},
+                    verbose=verbose,
+                    all_prefilled_outputs=prefilled_copy,
+                    audio_streamer=audio_streamer,
+                )
+        except Exception as e:
+            error_holder[0] = e
+        finally:
+            audio_streamer.end()
+
+    # Start generation in background thread
+    thread = threading.Thread(target=generate_thread, daemon=True)
+    thread.start()
+
+    # Yield audio chunks as they become available
+    stream = audio_streamer.get_stream(0)
+    for audio_chunk in stream:
+        if error_holder[0]:
+            raise SynthesisError(f"Generation failed: {error_holder[0]}")
+        audio = audio_chunk.cpu().float().numpy().flatten()
+        # Normalize if needed
+        max_val = max(abs(audio.max()), abs(audio.min())) if len(audio) > 0 else 1.0
+        if max_val > 1.0:
+            audio = audio / max_val
+        yield audio.astype(np.float32)
+
+    thread.join(timeout=5.0)
+    if error_holder[0]:
+        raise SynthesisError(f"Generation failed: {error_holder[0]}")
 
 
 def synthesize_script(
