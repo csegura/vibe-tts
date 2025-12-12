@@ -162,27 +162,25 @@ def synthesize_text(
 
             if is_realtime:
                 # Streaming model uses different input preparation
-                # Determine model dtype
                 model_dtype = torch.bfloat16 if actual_device == "cuda" else torch.float32
 
-                # Load voice embeddings if available
-                all_prefilled_outputs = None
-                if voice_sample:
-                    from .voices import get_voice_preset_path
-                    voice_path = get_voice_preset_path(voice_sample)
-                    if voice_path and voice_path.exists():
-                        all_prefilled_outputs = torch.load(voice_path, weights_only=False)
-
-                if all_prefilled_outputs is not None:
-                    inputs = processor.process_input_with_cached_prompt(
-                        text=script_text,
-                        cached_prompt=all_prefilled_outputs,
-                        padding=True,
-                        return_tensors="pt",
-                        return_attention_mask=True,
+                # Realtime model REQUIRES a voice preset - use en-Emma as default
+                actual_voice = voice_sample or "en-Emma"
+                from .voices import get_voice_preset_path
+                voice_path = get_voice_preset_path(actual_voice, verbose=verbose)
+                if not voice_path or not voice_path.exists():
+                    raise SynthesisError(
+                        f"Realtime model requires a voice preset. Could not load '{actual_voice}'"
                     )
-                else:
-                    inputs = processor(text=script_text, return_tensors="pt")
+                all_prefilled_outputs = torch.load(voice_path, weights_only=False)
+
+                inputs = processor.process_input_with_cached_prompt(
+                    text=script_text,
+                    cached_prompt=all_prefilled_outputs,
+                    padding=True,
+                    return_tensors="pt",
+                    return_attention_mask=True,
+                )
 
                 # Move all tensors to device with correct dtype
                 for k, v in inputs.items():
@@ -192,26 +190,24 @@ def synthesize_text(
                         else:
                             inputs[k] = v.to(actual_device)
 
-                with torch.no_grad():
-                    gen_kwargs = {
-                        **inputs,
-                        "tokenizer": processor.tokenizer,
-                        "cfg_scale": 1.5,
-                        "generation_config": {"do_sample": False},
-                        "verbose": verbose,
-                    }
-                    if all_prefilled_outputs is not None:
-                        # Convert cached prompt tensors to correct dtype
-                        prefilled_copy = copy.deepcopy(all_prefilled_outputs)
-                        for k, v in prefilled_copy.items():
-                            if torch.is_tensor(v):
-                                if v.dtype in (torch.float32, torch.float16, torch.bfloat16):
-                                    prefilled_copy[k] = v.to(device=actual_device, dtype=model_dtype)
-                                else:
-                                    prefilled_copy[k] = v.to(actual_device)
-                        gen_kwargs["all_prefilled_outputs"] = prefilled_copy
+                # Convert cached prompt tensors to correct dtype
+                prefilled_copy = copy.deepcopy(all_prefilled_outputs)
+                for k, v in prefilled_copy.items():
+                    if torch.is_tensor(v):
+                        if v.dtype in (torch.float32, torch.float16, torch.bfloat16):
+                            prefilled_copy[k] = v.to(device=actual_device, dtype=model_dtype)
+                        else:
+                            prefilled_copy[k] = v.to(actual_device)
 
-                    output = model.generate(**gen_kwargs)
+                with torch.no_grad():
+                    output = model.generate(
+                        **inputs,
+                        tokenizer=processor.tokenizer,
+                        cfg_scale=1.5,
+                        generation_config={"do_sample": False},
+                        verbose=verbose,
+                        all_prefilled_outputs=prefilled_copy,
+                    )
             else:
                 # Standard model
                 inputs = processor(text=script_text, voice_samples=voice_samples, return_tensors="pt")
