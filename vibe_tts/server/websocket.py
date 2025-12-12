@@ -4,6 +4,7 @@ import asyncio
 import json
 from typing import Any
 
+import numpy as np
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from ..synthesis import (
@@ -13,6 +14,9 @@ from ..synthesis import (
     synthesize_text_streaming,
 )
 from .audio_utils import numpy_to_pcm_bytes
+
+# Buffer ~0.5 seconds of audio before sending to avoid choppy playback
+MIN_SAMPLES_TO_SEND = SAMPLE_RATE // 2  # 12000 samples at 24kHz
 
 websocket_router = APIRouter()
 
@@ -94,6 +98,10 @@ async def websocket_stream(websocket: WebSocket) -> None:
                             except StopIteration:
                                 return None
 
+                        # Buffer chunks to avoid choppy audio
+                        audio_buffer = []
+                        buffered_samples = 0
+
                         while True:
                             if cancel_event.is_set():
                                 await websocket.send_json({"type": "cancelled"})
@@ -103,13 +111,28 @@ async def websocket_stream(websocket: WebSocket) -> None:
                                 None, get_next_chunk, gen
                             )
                             if audio_chunk is None:
+                                # Flush remaining buffer
+                                if audio_buffer:
+                                    combined = np.concatenate(audio_buffer)
+                                    pcm_bytes = numpy_to_pcm_bytes(combined)
+                                    total_bytes += len(pcm_bytes)
+                                    total_samples += len(combined)
+                                    await websocket.send_bytes(pcm_bytes)
                                 break
 
-                            pcm_bytes = numpy_to_pcm_bytes(audio_chunk)
-                            total_bytes += len(pcm_bytes)
-                            total_samples += len(audio_chunk)
-                            await websocket.send_bytes(pcm_bytes)
-                            await asyncio.sleep(0)
+                            audio_buffer.append(audio_chunk)
+                            buffered_samples += len(audio_chunk)
+
+                            # Send when buffer has ~0.5 seconds of audio
+                            if buffered_samples >= MIN_SAMPLES_TO_SEND:
+                                combined = np.concatenate(audio_buffer)
+                                pcm_bytes = numpy_to_pcm_bytes(combined)
+                                total_bytes += len(pcm_bytes)
+                                total_samples += len(combined)
+                                await websocket.send_bytes(pcm_bytes)
+                                await asyncio.sleep(0)
+                                audio_buffer = []
+                                buffered_samples = 0
 
                         if not cancel_event.is_set():
                             duration = total_samples / SAMPLE_RATE
