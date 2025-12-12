@@ -1,5 +1,6 @@
 """FastAPI application factory for vibe-tts server."""
 
+import os
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -11,6 +12,9 @@ from ..model import get_device, load_model
 from .middleware import setup_middleware
 from .routes import router
 from .websocket import websocket_router
+
+# Default streaming buffer in seconds
+DEFAULT_STREAM_BUFFER = 1.5
 
 
 @asynccontextmanager
@@ -43,6 +47,7 @@ def create_app(
     model_name: Optional[str] = None,
     device: Optional[str] = None,
     config: Optional[Config] = None,
+    stream_buffer: Optional[float] = None,
 ) -> FastAPI:
     """Create and configure the FastAPI application.
 
@@ -50,11 +55,16 @@ def create_app(
         model_name: Model to use (e.g., 'vibe-1.5b')
         device: Device to use ('auto', 'cpu', 'cuda')
         config: Configuration object
+        stream_buffer: Streaming audio buffer in seconds (default: 1.5)
 
     Returns:
         Configured FastAPI application
     """
     cfg = config or Config.load()
+
+    # Get stream buffer from param, env var, or default
+    if stream_buffer is None:
+        stream_buffer = float(os.environ.get("VIBE_STREAM_BUFFER", DEFAULT_STREAM_BUFFER))
 
     app = FastAPI(
         title="vibe-tts Server",
@@ -71,6 +81,7 @@ def create_app(
     app.state.model = None
     app.state.processor = None
     app.state.is_realtime = False
+    app.state.stream_buffer = stream_buffer
 
     setup_middleware(app)
     app.include_router(router)

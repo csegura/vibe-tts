@@ -15,9 +15,6 @@ from ..synthesis import (
 )
 from .audio_utils import numpy_to_pcm_bytes
 
-# Buffer ~0.5 seconds of audio before sending to avoid choppy playback
-MIN_SAMPLES_TO_SEND = SAMPLE_RATE // 2  # 12000 samples at 24kHz
-
 websocket_router = APIRouter()
 
 CHUNK_SIZE = 4096
@@ -99,6 +96,9 @@ async def websocket_stream(websocket: WebSocket) -> None:
                                 return None
 
                         # Buffer chunks to avoid choppy audio
+                        # Use configurable buffer (default 1.5 seconds)
+                        stream_buffer = websocket.app.state.stream_buffer
+                        min_samples_to_send = int(SAMPLE_RATE * stream_buffer)
                         audio_buffer = []
                         buffered_samples = 0
 
@@ -123,8 +123,8 @@ async def websocket_stream(websocket: WebSocket) -> None:
                             audio_buffer.append(audio_chunk)
                             buffered_samples += len(audio_chunk)
 
-                            # Send when buffer has ~0.5 seconds of audio
-                            if buffered_samples >= MIN_SAMPLES_TO_SEND:
+                            # Send when buffer has enough audio
+                            if buffered_samples >= min_samples_to_send:
                                 combined = np.concatenate(audio_buffer)
                                 pcm_bytes = numpy_to_pcm_bytes(combined)
                                 total_bytes += len(pcm_bytes)

@@ -295,6 +295,10 @@ def serve(
         Optional[str],
         typer.Option("--voice", help="Default voice preset (e.g., 'en-Emma')"),
     ] = None,
+    stream_buffer: Annotated[
+        float,
+        typer.Option("--stream-buffer", "-b", help="Streaming audio buffer in seconds"),
+    ] = 1.5,
     reload: Annotated[
         bool,
         typer.Option("--reload", help="Enable auto-reload for development"),
@@ -336,6 +340,7 @@ def serve(
     console.print(f"  Device: {device}")
     if voice:
         console.print(f"  Default voice: {voice}")
+    console.print(f"  Stream buffer: {stream_buffer}s")
     console.print(f"  Workers: {workers}")
     if reload:
         console.print("  [yellow]Reload mode enabled[/yellow]")
@@ -356,6 +361,7 @@ def serve(
             model_name=model,
             device=device,
             config=config,
+            stream_buffer=stream_buffer,
         )
         uvicorn.run(
             app_instance,

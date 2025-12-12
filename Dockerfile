@@ -59,8 +59,10 @@ EXPOSE 8000
 # Environment variables for configuration
 # VIBE_DEVICE: auto, cpu, cuda (default: auto)
 # VIBE_MODEL: vibe-1.5b, realtime-0.5b (default: vibe-1.5b)
+# VIBE_STREAM_BUFFER: streaming audio buffer in seconds (default: 1.5)
 ENV VIBE_DEVICE=auto
 ENV VIBE_MODEL=vibe-1.5b
+ENV VIBE_STREAM_BUFFER=1.5
 
 # Default command: start server on all interfaces
-CMD vibe-tts serve --host 0.0.0.0 --port 8000 --device $VIBE_DEVICE --model $VIBE_MODEL
+CMD vibe-tts serve --host 0.0.0.0 --port 8000 --device $VIBE_DEVICE --model $VIBE_MODEL --stream-buffer $VIBE_STREAM_BUFFER

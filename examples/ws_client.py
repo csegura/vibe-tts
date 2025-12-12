@@ -39,6 +39,31 @@ def find_audio_player() -> str | None:
     return None
 
 
+def start_streaming_player(sample_rate: int) -> subprocess.Popen | None:
+    """Start ffplay process for streaming PCM input."""
+    if not shutil.which("ffplay"):
+        return None
+    return subprocess.Popen(
+        [
+            "ffplay",
+            "-f", "s16le",
+            "-ar", str(sample_rate),
+            "-ac", "1",
+            "-nodisp",
+            "-autoexit",
+            "-probesize", "32",        # Minimal probe size for faster start
+            "-analyzeduration", "0",   # Don't analyze, we know the format
+            "-fflags", "nobuffer",     # Reduce buffering latency
+            "-flags", "low_delay",     # Low delay mode
+            "-infbuf",                 # Don't limit input buffer
+            "-",
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
 def play_with_command(audio_data: bytes, sample_rate: int, player: str) -> None:
     """Play audio using a command-line player."""
     import wave
@@ -78,12 +103,14 @@ async def synthesize_and_play(
     url: str = "ws://localhost:8000/stream",
     voice: str | None = None,
     output_file: str | None = None,
+    stream: bool = False,
 ):
     """Connect to vibe-tts server and stream audio."""
     audio_data = bytearray()
     sample_rate = 24000
+    player_proc = None
 
-    async with websockets.connect(url) as ws:
+    async with websockets.connect(url, ping_timeout=300, ping_interval=30) as ws:
         request = {"type": "synthesize", "text": text}
         if voice:
             request["voice"] = voice
@@ -96,6 +123,8 @@ async def synthesize_and_play(
 
             if isinstance(message, bytes):
                 audio_data.extend(message)
+                if stream and player_proc and player_proc.stdin:
+                    player_proc.stdin.write(message)
             else:
                 msg = json.loads(message)
                 msg_type = msg.get("type")
@@ -103,10 +132,20 @@ async def synthesize_and_play(
                 if msg_type == "start":
                     sample_rate = msg.get("sample_rate", 24000)
                     print(f"Streaming started (sample rate: {sample_rate} Hz)")
+                    if stream:
+                        player_proc = start_streaming_player(sample_rate)
+                        if player_proc:
+                            print("Streaming playback started (ffplay)")
+                        else:
+                            print("Warning: ffplay not found, will play after download")
                 elif msg_type == "progress":
                     print(f"Progress: chunk {msg['chunk']}/{msg['total_chunks']}")
                 elif msg_type == "complete":
                     print(f"Complete! Duration: {msg['duration']:.2f}s, Size: {msg['total_bytes']} bytes")
+                    if player_proc and player_proc.stdin:
+                        player_proc.stdin.close()
+                        player_proc.wait()
+                        player_proc = None
                     break
                 elif msg_type == "error":
                     print(f"Error: {msg['error']}")
@@ -128,7 +167,10 @@ async def synthesize_and_play(
             wf.writeframes(audio_data)
         print(f"Saved to: {output_file}")
 
-    # Play audio
+    # Play audio (skip if already streamed)
+    if stream and shutil.which("ffplay"):
+        return  # Already played via streaming
+
     played = False
     if HAS_SOUNDDEVICE:
         try:
@@ -157,6 +199,8 @@ def main():
     parser.add_argument("--url", default="ws://localhost:8000/stream", help="WebSocket URL")
     parser.add_argument("--voice", "-v", help="Voice preset (e.g., en-Emma)")
     parser.add_argument("--output", "-o", help="Save audio to WAV file")
+    parser.add_argument("--stream", "-s", action="store_true",
+                        help="Play audio as it arrives (requires ffplay)")
     args = parser.parse_args()
 
     asyncio.run(synthesize_and_play(
@@ -164,6 +208,7 @@ def main():
         url=args.url,
         voice=args.voice,
         output_file=args.output,
+        stream=args.stream,
     ))
 
 
