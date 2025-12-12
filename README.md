@@ -4,12 +4,16 @@ A cross-platform command-line tool for text-to-speech using Microsoft VibeVoice.
 
 ## Features
 
-- Convert text to natural-sounding speech using VibeVoice 1.5B model
+- Convert text to natural-sounding speech using VibeVoice models
+- **Two model options**: Standard 1.5B (high quality) and Realtime 0.5B (faster, streaming)
 - Multiple input methods: inline text, files, or stdin pipes
 - Multi-speaker script support for dialogues and podcasts
+- **25 voice presets** across 11 languages
 - **Server mode** with HTTP REST API and WebSocket streaming
+- **Real-time streaming playback** - hear audio as it's generated
 - Cross-platform audio playback
 - GPU acceleration with CUDA support
+- Docker support with GPU passthrough
 - Configurable via TOML config files
 
 ## Installation
@@ -47,6 +51,16 @@ pip install -e .
 git clone https://github.com/csegura/vibe-tts.git
 cd VibeVoice
 pip install -e .
+```
+
+### Docker Image
+
+A ready-to-use Docker image is available from Docker Hub:
+
+[https://hub.docker.com/r/romheat/vibe-tts](https://hub.docker.com/r/romheat/vibe-tts)
+
+```bash
+docker pull romheat/vibe-tts:latest
 ```
 
 ## Usage
@@ -124,14 +138,28 @@ Available voice presets:
 
 Voice presets are downloaded automatically on first use and cached locally.
 
-### Model and Device Selection
+### Model Selection
+
+Two models are available:
+
+| Model | Best For | Speakers | Max Duration | VRAM |
+|-------|----------|----------|--------------|------|
+| `vibe-1.5b` | High quality, multi-speaker | Up to 4 | ~90 min | 10-16GB |
+| `realtime-0.5b` | Fast generation, streaming | 1 only | ~10 min | 4-6GB |
 
 ```bash
 # Use the default 1.5B model (recommended for quality)
 uv run vibe-tts --text "Hello" --model vibe-1.5b
 
-# Use the realtime 0.5B model (faster, lower quality)
+# Use the realtime 0.5B model (faster, single speaker)
 uv run vibe-tts --text "Hello" --model realtime-0.5b
+```
+
+### Device Selection
+
+```bash
+# Auto-detect (uses CUDA if available, otherwise CPU)
+uv run vibe-tts --text "Hello" --device auto
 
 # Force CPU execution
 uv run vibe-tts --text "Hello" --device cpu
@@ -247,6 +275,50 @@ Connect to `ws://localhost:8000/stream` for real-time audio streaming.
 {"type": "cancel"}
 ```
 
+### WebSocket Client
+
+A Python WebSocket client is included for testing and real-time streaming playback.
+
+#### Basic Usage
+
+```bash
+# Simple synthesis (collects audio, then plays)
+uv run python examples/ws_client.py "Hello, this is a test"
+
+# With voice preset
+uv run python examples/ws_client.py --voice en-Emma "Hello world"
+
+# Save to file
+uv run python examples/ws_client.py --output hello.wav "Hello world"
+
+# Connect to remote server
+uv run python examples/ws_client.py --url ws://192.168.1.100:8000/stream "Hello"
+```
+
+#### Real-Time Streaming Playback
+
+Use the `--stream` flag to hear audio as it arrives (requires `ffplay`):
+
+```bash
+# Stream playback - hear audio in real-time as it's generated
+uv run python examples/ws_client.py --stream "Hello, this is a long text that will start playing immediately"
+
+# Stream with voice preset
+uv run python examples/ws_client.py --stream --voice en-Emma "Hello world"
+
+# Stream from remote server
+uv run python examples/ws_client.py --stream --url ws://192.168.1.100:8000/stream "Hello"
+```
+
+#### Client Options
+
+| Option | Short | Description |
+|--------|-------|-------------|
+| `--url` | | WebSocket URL (default: `ws://localhost:8000/stream`) |
+| `--voice` | `-v` | Voice preset (e.g., `en-Emma`) |
+| `--output` | `-o` | Save audio to WAV file |
+| `--stream` | `-s` | Play audio as it arrives (requires `ffplay`) |
+
 ### Python Client Example
 
 ```python
@@ -258,6 +330,37 @@ response = requests.post(
 )
 with open("output.wav", "wb") as f:
     f.write(response.content)
+```
+
+### Python WebSocket Example
+
+```python
+import asyncio
+import json
+import websockets
+
+async def synthesize_streaming(text: str, voice: str = None):
+    async with websockets.connect("ws://localhost:8000/stream") as ws:
+        request = {"type": "synthesize", "text": text}
+        if voice:
+            request["voice"] = voice
+
+        await ws.send(json.dumps(request))
+        audio_data = bytearray()
+
+        while True:
+            message = await ws.recv()
+            if isinstance(message, bytes):
+                audio_data.extend(message)
+            else:
+                msg = json.loads(message)
+                if msg["type"] == "complete":
+                    break
+
+        return bytes(audio_data)
+
+# Usage
+audio = asyncio.run(synthesize_streaming("Hello world", voice="en-Emma"))
 ```
 
 ## CLI Options
@@ -375,3 +478,7 @@ MIT
 ## Acknowledgments
 
 - [Microsoft VibeVoice](https://github.com/csegura/vibe-tts.git) - The underlying TTS model
+
+## Notes
+
+- At home I'm using a 3060 GPU with 8GB VRAM without issues.

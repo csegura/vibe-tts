@@ -30,6 +30,9 @@ except (ImportError, Exception):
 
 AUDIO_PLAYERS = ["play", "ffplay", "aplay", "paplay", "mpv", "vlc"]
 
+# Playback constants (24kHz, 16-bit mono)
+FRAME_SIZE = 960  # 20ms = 480 samples × 2 bytes
+
 
 def find_audio_player() -> str | None:
     """Find first available command-line audio player."""
@@ -51,11 +54,10 @@ def start_streaming_player(sample_rate: int) -> subprocess.Popen | None:
             "-ac", "1",
             "-nodisp",
             "-autoexit",
-            "-probesize", "32",        # Minimal probe size for faster start
-            "-analyzeduration", "0",   # Don't analyze, we know the format
-            "-fflags", "nobuffer",     # Reduce buffering latency
-            "-flags", "low_delay",     # Low delay mode
-            "-infbuf",                 # Don't limit input buffer
+            "-fflags", "nobuffer",
+            "-flags", "low_delay",
+            "-infbuf",
+            "-af", "aresample=async=1:first_pts=0",
             "-",
         ],
         stdin=subprocess.PIPE,
@@ -105,14 +107,16 @@ async def synthesize_and_play(
     output_file: str | None = None,
     stream: bool = False,
 ):
-    """Connect to vibe-tts server and stream audio."""
+    """Connect to vibe-tts server and stream audio.
+
+    Note: The VibeVoice model doesn't support true incremental streaming -
+    it generates all audio before sending. The --stream flag starts playback
+    as soon as data arrives but won't reduce initial latency.
+    """
     audio_data = bytearray()
     sample_rate = 24000
     player_proc = None
-    # Buffer 3 seconds of audio before starting playback to avoid gaps
-    prebuffer_bytes = 0
-    prebuffer_target = 0
-    prebuffer_done = False
+    playback_started = False
 
     async with websockets.connect(url, ping_timeout=300, ping_interval=30) as ws:
         request = {"type": "synthesize", "text": text}
@@ -127,22 +131,22 @@ async def synthesize_and_play(
 
             if isinstance(message, bytes):
                 audio_data.extend(message)
-                if stream:
-                    if not prebuffer_done:
-                        # Buffer audio before starting playback
-                        prebuffer_bytes += len(message)
-                        if prebuffer_bytes >= prebuffer_target:
-                            # Start player and write buffered audio
-                            player_proc = start_streaming_player(sample_rate)
-                            if player_proc and player_proc.stdin:
-                                print(f"Prebuffered {prebuffer_bytes // 1000}KB, starting playback...")
-                                player_proc.stdin.write(bytes(audio_data))
-                                prebuffer_done = True
-                            else:
-                                print("Warning: ffplay not available")
-                                prebuffer_done = True
-                    elif player_proc and player_proc.stdin:
+                # Start playback as soon as we get first chunk
+                if stream and not playback_started:
+                    player_proc = start_streaming_player(sample_rate)
+                    if player_proc:
+                        print("Starting playback...")
+                        playback_started = True
+                    else:
+                        print("Warning: ffplay not available")
+                        playback_started = True
+
+                # Write to player if streaming
+                if stream and player_proc and player_proc.stdin:
+                    try:
                         player_proc.stdin.write(message)
+                    except BrokenPipeError:
+                        pass
             else:
                 msg = json.loads(message)
                 msg_type = msg.get("type")
@@ -150,11 +154,6 @@ async def synthesize_and_play(
                 if msg_type == "start":
                     sample_rate = msg.get("sample_rate", 24000)
                     print(f"Streaming started (sample rate: {sample_rate} Hz)")
-                    # Calculate prebuffer target: 3 seconds of audio
-                    # 24000 samples/sec * 2 bytes/sample = 48000 bytes/sec
-                    prebuffer_target = sample_rate * 2 * 3  # 3 seconds
-                    if stream:
-                        print(f"Prebuffering {prebuffer_target // 1000}KB before playback...")
                 elif msg_type == "progress":
                     print(f"Progress: chunk {msg['chunk']}/{msg['total_chunks']}")
                 elif msg_type == "complete":
@@ -162,7 +161,6 @@ async def synthesize_and_play(
                     if player_proc and player_proc.stdin:
                         player_proc.stdin.close()
                         player_proc.wait()
-                        player_proc = None
                     break
                 elif msg_type == "error":
                     print(f"Error: {msg['error']}")
@@ -185,8 +183,8 @@ async def synthesize_and_play(
         print(f"Saved to: {output_file}")
 
     # Play audio (skip if already streamed)
-    if stream and shutil.which("ffplay"):
-        return  # Already played via streaming
+    if stream and playback_started.is_set():
+        return
 
     played = False
     if HAS_SOUNDDEVICE:
