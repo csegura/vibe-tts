@@ -5,6 +5,8 @@ services:
       - "8000:8000"
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
+      - VIBE_DEVICE=${VIBE_DEVICE:-auto}
+      - VIBE_MODEL=${VIBE_MODEL:-vibe-1.5b}
     # Uncomment for GPU support:
     # deploy:
     #   resources:
@@ -13,7 +15,6 @@ services:
     #         - driver: nvidia
     #           count: 1
     #           capabilities: [gpu]
-    command: ["vibe-tts", "serve", "--host", "0.0.0.0", "--port", "8000", "--device", "auto"]
     # Optional: persist model cache
     # volumes:
     #   - vibe-tts-cache:/root/.cache/huggingface

@@ -17,14 +17,14 @@ A cross-platform command-line tool for text-to-speech using Microsoft VibeVoice.
 ### Prerequisites
 
 - Python 3.10+
-- [VibeVoice](https://github.com/microsoft/VibeVoice) package
+- [VibeVoice](https://github.com/csegura/vibe-tts.git) package
 - PyTorch (CUDA optional for GPU acceleration)
 
 ### Install with uv (recommended)
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/vibe-tts.git
+git clone https://github.com/csegura/vibe-tts.git
 cd vibe-tts
 
 # Install dependencies and package
@@ -44,7 +44,7 @@ pip install -e .
 
 ```bash
 # Clone and install vibevoice
-git clone https://github.com/microsoft/VibeVoice.git
+git clone https://github.com/csegura/vibe-tts.git
 cd VibeVoice
 pip install -e .
 ```
@@ -319,10 +319,59 @@ CLI flags always override config file values.
 - PyTorch 2.0+
 - vibevoice package
 
+## Docker
+
+Run vibe-tts server in a Docker container with optional GPU support.
+
+### Build the Image
+
+```bash
+docker build -t vibe-tts .
+```
+
+### Run the Container
+
+```bash
+# CPU mode (default)
+docker run -p 8000:8000 -e VIBE_DEVICE=cpu vibe-tts
+
+# GPU mode (requires nvidia-docker)
+docker run --gpus all -p 8000:8000 -e VIBE_DEVICE=cuda vibe-tts
+
+# Use smaller model (less memory)
+docker run -p 8000:8000 -e VIBE_DEVICE=cpu -e VIBE_MODEL=realtime-0.5b vibe-tts
+```
+
+### Using Docker Compose
+
+```bash
+# Default settings
+docker compose up
+
+# With custom settings
+VIBE_DEVICE=cpu VIBE_MODEL=realtime-0.5b docker compose up
+```
+
+### Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `VIBE_DEVICE` | Device to use (`auto`, `cpu`, `cuda`) | `auto` |
+| `VIBE_MODEL` | Model to use (`vibe-1.5b`, `realtime-0.5b`) | `vibe-1.5b` |
+
+### Memory Requirements
+
+| Model | GPU VRAM | System RAM |
+|-------|----------|------------|
+| `vibe-1.5b` | ~10-16GB | ~16GB |
+| `realtime-0.5b` | ~4-6GB | ~8GB |
+
+If you encounter CUDA out of memory errors, use `VIBE_DEVICE=cpu` or switch to `realtime-0.5b`.
+
 ## License
 
 MIT
 
 ## Acknowledgments
 
-- [Microsoft VibeVoice](https://github.com/microsoft/VibeVoice) - The underlying TTS model
+- [Microsoft VibeVoice](https://github.com/csegura/vibe-tts.git) - The underlying TTS model

@@ -21,7 +21,7 @@ async def lifespan(app: FastAPI):
     model_name = app.state.model_name
 
     print(f"Loading model: {model_name} on {app.state.actual_device}...")
-    model, processor = load_model(
+    model, processor, is_realtime = load_model(
         model_name=model_name,
         device=device,
         config=config,
@@ -29,6 +29,7 @@ async def lifespan(app: FastAPI):
     )
     app.state.model = model
     app.state.processor = processor
+    app.state.is_realtime = is_realtime
     app.state.model_loaded = True
     print("Model loaded successfully, server ready.")
 
@@ -69,6 +70,7 @@ def create_app(
     app.state.model_loaded = False
     app.state.model = None
     app.state.processor = None
+    app.state.is_realtime = False
 
     setup_middleware(app)
     app.include_router(router)

@@ -43,10 +43,6 @@ Dockerfile
 docker-compose*.yml
 .dockerignore
 
-# Documentation
-*.md
-!README.md
-
 # Examples (not needed in server image)
 examples/
 

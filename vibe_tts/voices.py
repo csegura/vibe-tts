@@ -150,6 +150,22 @@ def ensure_voice(voice_name: str, verbose: bool = False) -> Path:
     return download_voice(voice_name, verbose=verbose)
 
 
+def get_voice_preset_path(voice_name: str, verbose: bool = False) -> Optional[Path]:
+    """Get the path to a voice preset, downloading if necessary.
+
+    Args:
+        voice_name: Voice name or path to voice file
+        verbose: Print progress
+
+    Returns:
+        Path to the voice file, or None if not found
+    """
+    try:
+        return ensure_voice(voice_name, verbose=verbose)
+    except Exception:
+        return None
+
+
 def load_voice_sample(voice_name: str, verbose: bool = False) -> np.ndarray:
     """Load a voice sample as a numpy array.
 
