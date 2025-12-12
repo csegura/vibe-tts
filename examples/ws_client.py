@@ -109,6 +109,10 @@ async def synthesize_and_play(
     audio_data = bytearray()
     sample_rate = 24000
     player_proc = None
+    # Buffer 3 seconds of audio before starting playback to avoid gaps
+    prebuffer_bytes = 0
+    prebuffer_target = 0
+    prebuffer_done = False
 
     async with websockets.connect(url, ping_timeout=300, ping_interval=30) as ws:
         request = {"type": "synthesize", "text": text}
@@ -123,8 +127,22 @@ async def synthesize_and_play(
 
             if isinstance(message, bytes):
                 audio_data.extend(message)
-                if stream and player_proc and player_proc.stdin:
-                    player_proc.stdin.write(message)
+                if stream:
+                    if not prebuffer_done:
+                        # Buffer audio before starting playback
+                        prebuffer_bytes += len(message)
+                        if prebuffer_bytes >= prebuffer_target:
+                            # Start player and write buffered audio
+                            player_proc = start_streaming_player(sample_rate)
+                            if player_proc and player_proc.stdin:
+                                print(f"Prebuffered {prebuffer_bytes // 1000}KB, starting playback...")
+                                player_proc.stdin.write(bytes(audio_data))
+                                prebuffer_done = True
+                            else:
+                                print("Warning: ffplay not available")
+                                prebuffer_done = True
+                    elif player_proc and player_proc.stdin:
+                        player_proc.stdin.write(message)
             else:
                 msg = json.loads(message)
                 msg_type = msg.get("type")
@@ -132,12 +150,11 @@ async def synthesize_and_play(
                 if msg_type == "start":
                     sample_rate = msg.get("sample_rate", 24000)
                     print(f"Streaming started (sample rate: {sample_rate} Hz)")
+                    # Calculate prebuffer target: 3 seconds of audio
+                    # 24000 samples/sec * 2 bytes/sample = 48000 bytes/sec
+                    prebuffer_target = sample_rate * 2 * 3  # 3 seconds
                     if stream:
-                        player_proc = start_streaming_player(sample_rate)
-                        if player_proc:
-                            print("Streaming playback started (ffplay)")
-                        else:
-                            print("Warning: ffplay not found, will play after download")
+                        print(f"Prebuffering {prebuffer_target // 1000}KB before playback...")
                 elif msg_type == "progress":
                     print(f"Progress: chunk {msg['chunk']}/{msg['total_chunks']}")
                 elif msg_type == "complete":
